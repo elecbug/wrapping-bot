@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -27,6 +28,7 @@ Examples:
   wrapping-bot -- ./exp run
   wrapping-bot "./exp run"
   wrapping-bot --channel-id 123456789012345678 --env TOPOLOGY --env SEED -- ./exp run
+  wrapping-bot --client-env /etc/wrapping-bot/client.env -- ./exp run
 `
 
 type stringList []string
@@ -41,6 +43,7 @@ func (s *stringList) Set(value string) error {
 }
 
 type options struct {
+	clientEnv     string
 	endpoint      string
 	token         string
 	channelID     string
@@ -59,6 +62,16 @@ func main() {
 }
 
 func run(args []string) int {
+	clientEnvPath, explicitClientEnv, err := resolveClientEnvPath(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wrapping-bot:", err)
+		return 2
+	}
+	if err := loadClientEnv(clientEnvPath, explicitClientEnv); err != nil {
+		fmt.Fprintln(os.Stderr, "wrapping-bot: load client environment:", err)
+		return 2
+	}
+
 	opts, commandArgs, err := parseOptions(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "wrapping-bot:", err)
@@ -146,6 +159,141 @@ func run(args []string) int {
 	return exitCode
 }
 
+func resolveClientEnvPath(args []string) (string, bool, error) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			break
+		}
+		if arg == "--client-env" {
+			if index+1 >= len(args) {
+				return "", false, errors.New("--client-env requires a path")
+			}
+			path := strings.TrimSpace(args[index+1])
+			if path == "" {
+				return "", false, errors.New("--client-env requires a non-empty path")
+			}
+			return path, true, nil
+		}
+		if strings.HasPrefix(arg, "--client-env=") {
+			path := strings.TrimSpace(strings.TrimPrefix(arg, "--client-env="))
+			if path == "" {
+				return "", false, errors.New("--client-env requires a non-empty path")
+			}
+			return path, true, nil
+		}
+	}
+
+	if path := clientEnvPathFromEnvironment(); path != "" {
+		return path, true, nil
+	}
+	return "client.env", false, nil
+}
+
+func clientEnvPathFromEnvironment() string {
+	return strings.TrimSpace(os.Getenv("WRAPPING_BOT_CLIENT_ENV_FILE"))
+}
+
+func loadClientEnv(path string, required bool) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) && !required {
+			return nil
+		}
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		key, value, ok, err := parseEnvLine(scanner.Text())
+		if err != nil {
+			return fmt.Errorf("%s:%d: %w", path, lineNumber, err)
+		}
+		if !ok {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("%s:%d: set %s: %w", path, lineNumber, key, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return nil
+}
+
+func parseEnvLine(line string) (string, string, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false, nil
+	}
+	if strings.HasPrefix(line, "export ") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+	}
+	key, rawValue, found := strings.Cut(line, "=")
+	if !found {
+		return "", "", false, errors.New("expected KEY=VALUE")
+	}
+	key = strings.TrimSpace(key)
+	if !isEnvKey(key) {
+		return "", "", false, fmt.Errorf("invalid environment key %q", key)
+	}
+
+	rawValue = strings.TrimSpace(rawValue)
+	value, err := parseEnvValue(rawValue)
+	if err != nil {
+		return "", "", false, err
+	}
+	return key, value, true, nil
+}
+
+func isEnvKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for index, r := range key {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_' || (index > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func parseEnvValue(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if raw[0] == '\'' {
+		if len(raw) < 2 || raw[len(raw)-1] != '\'' {
+			return "", errors.New("unterminated single-quoted value")
+		}
+		return raw[1 : len(raw)-1], nil
+	}
+	if raw[0] == '"' {
+		if len(raw) < 2 || raw[len(raw)-1] != '"' {
+			return "", errors.New("unterminated double-quoted value")
+		}
+		value, err := strconv.Unquote(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid double-quoted value: %w", err)
+		}
+		return value, nil
+	}
+
+	if index := strings.Index(raw, " #"); index >= 0 {
+		raw = strings.TrimSpace(raw[:index])
+	}
+	return raw, nil
+}
+
 func parseOptions(args []string) (options, []string, error) {
 	defaultsKeys := parseCSV(os.Getenv("WRAPPING_BOT_ENV_KEYS"))
 	defaultsPrefixes := parseCSV(os.Getenv("WRAPPING_BOT_ENV_PREFIXES"))
@@ -155,6 +303,7 @@ func parseOptions(args []string) (options, []string, error) {
 	}
 
 	opts := options{
+		clientEnv:     clientEnvPathFromEnvironment(),
 		endpoint:      envOr("WRAPPING_BOT_ENDPOINT", "http://127.0.0.1:8080"),
 		token:         strings.TrimSpace(os.Getenv("WRAPPING_BOT_TOKEN")),
 		channelID:     strings.TrimSpace(os.Getenv("WRAPPING_BOT_CHANNEL_ID")),
@@ -168,6 +317,7 @@ func parseOptions(args []string) (options, []string, error) {
 
 	fs := flag.NewFlagSet("wrapping-bot", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	fs.StringVar(&opts.clientEnv, "client-env", opts.clientEnv, "client environment file (default: ./client.env)")
 	fs.StringVar(&opts.endpoint, "endpoint", opts.endpoint, "relay daemon base URL")
 	fs.StringVar(&opts.token, "token", opts.token, "relay shared token")
 	fs.StringVar(&opts.channelID, "channel-id", opts.channelID, "Discord channel ID receiving this run")
