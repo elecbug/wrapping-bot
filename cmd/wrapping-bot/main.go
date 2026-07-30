@@ -26,7 +26,7 @@ const usageText = `Usage:
 Examples:
   wrapping-bot -- ./exp run
   wrapping-bot "./exp run"
-  wrapping-bot --target peerkit --env TOPOLOGY --env SEED -- ./exp run
+  wrapping-bot --channel-id 123456789012345678 --env TOPOLOGY --env SEED -- ./exp run
 `
 
 type stringList []string
@@ -43,7 +43,7 @@ func (s *stringList) Set(value string) error {
 type options struct {
 	endpoint      string
 	token         string
-	target        string
+	channelID     string
 	name          string
 	shell         bool
 	envKeys       stringList
@@ -92,7 +92,7 @@ func run(args []string) int {
 		Type:             protocol.EventStart,
 		RunID:            runID,
 		Timestamp:        startedAt,
-		Target:           opts.target,
+		ChannelID:        opts.channelID,
 		Name:             opts.name,
 		Command:          append([]string(nil), commandArgs...),
 		Shell:            shellMode,
@@ -157,7 +157,7 @@ func parseOptions(args []string) (options, []string, error) {
 	opts := options{
 		endpoint:      envOr("WRAPPING_BOT_ENDPOINT", "http://127.0.0.1:8080"),
 		token:         strings.TrimSpace(os.Getenv("WRAPPING_BOT_TOKEN")),
-		target:        envOr("WRAPPING_BOT_TARGET", "default"),
+		channelID:     strings.TrimSpace(os.Getenv("WRAPPING_BOT_CHANNEL_ID")),
 		name:          strings.TrimSpace(os.Getenv("WRAPPING_BOT_RUN_NAME")),
 		envKeys:       append(stringList(nil), defaultsKeys...),
 		envPrefixes:   append(stringList(nil), defaultsPrefixes...),
@@ -170,7 +170,7 @@ func parseOptions(args []string) (options, []string, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.endpoint, "endpoint", opts.endpoint, "relay daemon base URL")
 	fs.StringVar(&opts.token, "token", opts.token, "relay shared token")
-	fs.StringVar(&opts.target, "target", opts.target, "configured Discord channel target alias")
+	fs.StringVar(&opts.channelID, "channel-id", opts.channelID, "Discord channel ID receiving this run")
 	fs.StringVar(&opts.name, "name", opts.name, "display name for this run")
 	fs.BoolVar(&opts.shell, "shell", false, "always execute through /bin/sh -lc")
 	fs.Var(&opts.envKeys, "env", "environment key to include; repeatable")
@@ -189,13 +189,21 @@ func parseOptions(args []string) (options, []string, error) {
 	if strings.TrimSpace(opts.token) == "" {
 		return options{}, nil, errors.New("WRAPPING_BOT_TOKEN or --token is required")
 	}
-	if strings.TrimSpace(opts.target) == "" {
-		return options{}, nil, errors.New("target must not be empty")
+	if !isDiscordChannelID(opts.channelID) {
+		return options{}, nil, errors.New("WRAPPING_BOT_CHANNEL_ID or --channel-id must be a 17-20 digit Discord channel ID")
 	}
 	if opts.queueSize < 1 {
 		return options{}, nil, errors.New("queue size must be positive")
 	}
 	return opts, commandArgs, nil
+}
+
+func isDiscordChannelID(value string) bool {
+	if value != strings.TrimSpace(value) || len(value) < 17 || len(value) > 20 {
+		return false
+	}
+	_, err := strconv.ParseUint(value, 10, 64)
+	return err == nil
 }
 
 func buildCommand(args []string, shell bool) *exec.Cmd {

@@ -43,7 +43,7 @@ func TestSessionStreamsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := protocol.Event{Version: protocol.Version, Type: protocol.EventStart, RunID: "run-1", Timestamp: time.Now(), Target: "default", Command: []string{"echo", "hello"}}
+	start := protocol.Event{Version: protocol.Version, Type: protocol.EventStart, RunID: "run-1", Timestamp: time.Now(), ChannelID: "123456789012345678", Command: []string{"echo", "hello"}}
 	if err := session.SendStart(start); err != nil {
 		t.Fatal(err)
 	}

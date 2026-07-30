@@ -16,13 +16,15 @@ import (
 )
 
 type captureSender struct {
-	mu       sync.Mutex
-	messages []string
+	mu         sync.Mutex
+	channelIDs []string
+	messages   []string
 }
 
-func (s *captureSender) Send(_ string, content string) error {
+func (s *captureSender) Send(channelID string, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.channelIDs = append(s.channelIDs, channelID)
 	s.messages = append(s.messages, content)
 	return nil
 }
@@ -37,7 +39,6 @@ func TestStreamRun(t *testing.T) {
 	sender := &captureSender{}
 	cfg := Config{
 		SharedToken:       "relay-secret",
-		Channels:          map[string]string{"default": "123"},
 		FlushInterval:     time.Millisecond,
 		MaxLogChunkBytes:  1600,
 		QueueSize:         16,
@@ -54,7 +55,7 @@ func TestStreamRun(t *testing.T) {
 			Type:             protocol.EventStart,
 			RunID:            "0123456789abcdef",
 			Timestamp:        time.Now().UTC(),
-			Target:           "default",
+			ChannelID:        "123456789012345678",
 			Name:             "test run",
 			Command:          []string{"./exp", "run"},
 			Hostname:         "test-host",
@@ -100,6 +101,15 @@ func TestStreamRun(t *testing.T) {
 	if !response.Accepted {
 		t.Fatalf("response not accepted: %+v", response)
 	}
+	sender.mu.Lock()
+	for _, channelID := range sender.channelIDs {
+		if channelID != "123456789012345678" {
+			sender.mu.Unlock()
+			t.Fatalf("unexpected channel ID %q", channelID)
+		}
+	}
+	sender.mu.Unlock()
+
 	joined := sender.joined()
 	for _, expected := range []string{"Run started", "hello from experiment", "Run completed", "TOPOLOGY=ER"} {
 		if !strings.Contains(joined, expected) {
@@ -111,7 +121,6 @@ func TestStreamRun(t *testing.T) {
 func TestStreamUnauthorized(t *testing.T) {
 	cfg := Config{
 		SharedToken:       "relay-secret",
-		Channels:          map[string]string{"default": "123"},
 		FlushInterval:     time.Millisecond,
 		MaxLogChunkBytes:  1600,
 		QueueSize:         1,
@@ -123,5 +132,38 @@ func TestStreamUnauthorized(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/runs/stream", strings.NewReader("{}\n")))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("got %d", recorder.Code)
+	}
+}
+
+func TestStreamRejectsChannelOutsideAllowlist(t *testing.T) {
+	cfg := Config{
+		SharedToken:       "relay-secret",
+		AllowedChannelIDs: map[string]struct{}{"111111111111111111": {}},
+		FlushInterval:     time.Millisecond,
+		MaxLogChunkBytes:  1600,
+		QueueSize:         1,
+		MaxConcurrentRuns: 1,
+		MaxStreamBytes:    1024,
+	}
+	server := NewServer(cfg, &captureSender{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	start := protocol.Event{
+		Version:   protocol.Version,
+		Type:      protocol.EventStart,
+		RunID:     "run-allowlist",
+		Timestamp: time.Now().UTC(),
+		ChannelID: "222222222222222222",
+		Command:   []string{"echo", "hello"},
+	}
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(start); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/stream", &body)
+	req.Header.Set("Authorization", "Bearer relay-secret")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

@@ -90,19 +90,21 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, protocol.StreamResponse{RunID: start.RunID, Accepted: false, Error: err.Error()})
 		return
 	}
-	channelID, ok := s.cfg.Channels[start.Target]
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, protocol.StreamResponse{RunID: start.RunID, Accepted: false, Error: "unknown target"})
-		return
+	channelID := start.ChannelID
+	if len(s.cfg.AllowedChannelIDs) > 0 {
+		if _, ok := s.cfg.AllowedChannelIDs[channelID]; !ok {
+			writeJSON(w, http.StatusForbidden, protocol.StreamResponse{RunID: start.RunID, Accepted: false, Error: "channel ID is not allowed by the relay"})
+			return
+		}
 	}
 
 	if err := s.sendLong(channelID, formatStart(start)); err != nil {
-		s.logger.Error("failed to send Discord start message", "run_id", start.RunID, "target", start.Target, "error", err)
+		s.logger.Error("failed to send Discord start message", "run_id", start.RunID, "channel_id", channelID, "error", err)
 		writeJSON(w, http.StatusBadGateway, protocol.StreamResponse{RunID: start.RunID, Accepted: false, Error: "failed to send Discord message"})
 		return
 	}
 
-	s.logger.Info("run relay started", "run_id", start.RunID, "target", start.Target, "hostname", start.Hostname)
+	s.logger.Info("run relay started", "run_id", start.RunID, "channel_id", channelID, "hostname", start.Hostname)
 	batcher := NewBatcher(
 		s.sender,
 		channelID,
@@ -228,8 +230,8 @@ func validateStart(event protocol.Event) error {
 	if strings.TrimSpace(event.RunID) == "" || len(event.RunID) > 128 {
 		return errors.New("invalid run ID")
 	}
-	if strings.TrimSpace(event.Target) == "" || len(event.Target) > 64 {
-		return errors.New("invalid target")
+	if !isDiscordChannelID(event.ChannelID) {
+		return errors.New("invalid Discord channel ID")
 	}
 	if len(event.Command) == 0 {
 		return errors.New("command is required")
@@ -238,6 +240,14 @@ func validateStart(event protocol.Event) error {
 		return errors.New("too many environment fields")
 	}
 	return nil
+}
+
+func isDiscordChannelID(value string) bool {
+	if value != strings.TrimSpace(value) || len(value) < 17 || len(value) > 20 {
+		return false
+	}
+	_, err := strconv.ParseUint(value, 10, 64)
+	return err == nil
 }
 
 func formatStart(event protocol.Event) string {

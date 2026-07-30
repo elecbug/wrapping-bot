@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +14,7 @@ type Config struct {
 	DiscordBotToken   string
 	DiscordAPIBaseURL string
 	SharedToken       string
-	Channels          map[string]string
+	AllowedChannelIDs map[string]struct{}
 	FlushInterval     time.Duration
 	MaxLogChunkBytes  int
 	QueueSize         int
@@ -30,6 +29,7 @@ func LoadConfigFromEnv() (Config, error) {
 		DiscordBotToken:   strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
 		DiscordAPIBaseURL: envOr("DISCORD_API_BASE_URL", "https://discord.com/api/v10"),
 		SharedToken:       strings.TrimSpace(os.Getenv("WRAPPING_BOT_SHARED_TOKEN")),
+		AllowedChannelIDs: make(map[string]struct{}),
 		FlushInterval:     1500 * time.Millisecond,
 		MaxLogChunkBytes:  1600,
 		QueueSize:         1024,
@@ -45,21 +45,15 @@ func LoadConfigFromEnv() (Config, error) {
 		return Config{}, errors.New("WRAPPING_BOT_SHARED_TOKEN is required")
 	}
 
-	channelsRaw := strings.TrimSpace(os.Getenv("WRAPPING_BOT_CHANNELS"))
-	if channelsRaw != "" {
-		if err := json.Unmarshal([]byte(channelsRaw), &cfg.Channels); err != nil {
-			return Config{}, fmt.Errorf("parse WRAPPING_BOT_CHANNELS: %w", err)
+	for _, channelID := range strings.Split(os.Getenv("WRAPPING_BOT_ALLOWED_CHANNEL_IDS"), ",") {
+		channelID = strings.TrimSpace(channelID)
+		if channelID == "" {
+			continue
 		}
-	} else if channelID := strings.TrimSpace(os.Getenv("DISCORD_CHANNEL_ID")); channelID != "" {
-		cfg.Channels = map[string]string{"default": channelID}
-	}
-	if len(cfg.Channels) == 0 {
-		return Config{}, errors.New("WRAPPING_BOT_CHANNELS or DISCORD_CHANNEL_ID is required")
-	}
-	for target, channelID := range cfg.Channels {
-		if strings.TrimSpace(target) == "" || strings.TrimSpace(channelID) == "" {
-			return Config{}, errors.New("channel target names and IDs must not be empty")
+		if !isDiscordChannelID(channelID) {
+			return Config{}, fmt.Errorf("invalid channel ID in WRAPPING_BOT_ALLOWED_CHANNEL_IDS: %q", channelID)
 		}
+		cfg.AllowedChannelIDs[channelID] = struct{}{}
 	}
 
 	var err error

@@ -2,7 +2,7 @@ package protocol
 
 import "time"
 
-const Version = 1
+const Version = 2
 
 const (
 	EventStart  = "start"
@@ -21,8 +21,8 @@ type Event struct {
 	Version          int               `json:"version"`
 	Type             string            `json:"type"`
 	RunID            string            `json:"run_id"`
-	Timestamp        time.Time          `json:"timestamp"`
-	Target           string            `json:"target,omitempty"`
+	Timestamp        time.Time         `json:"timestamp"`
+	ChannelID        string            `json:"channel_id,omitempty"`
 	Name             string            `json:"name,omitempty"`
 	Command          []string          `json:"command,omitempty"`
 	Shell            bool              `json:"shell,omitempty"`

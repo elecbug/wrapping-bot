@@ -45,7 +45,7 @@ func serve() error {
 	server := daemon.NewServer(cfg, sender, logger).HTTPServer()
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("wrapping-bot daemon listening", "address", cfg.ListenAddr, "targets", channelNames(cfg.Channels))
+		logger.Info("wrapping-bot daemon listening", "address", cfg.ListenAddr, "channel_selection", "client", "allowed_channel_count", len(cfg.AllowedChannelIDs))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
@@ -90,12 +90,4 @@ func healthcheck() error {
 		return fmt.Errorf("unexpected health status %q", payload.Status)
 	}
 	return nil
-}
-
-func channelNames(channels map[string]string) []string {
-	names := make([]string, 0, len(channels))
-	for name := range channels {
-		names = append(names, name)
-	}
-	return names
 }
