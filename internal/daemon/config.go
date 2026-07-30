@@ -1,0 +1,129 @@
+package daemon
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	ListenAddr        string
+	DiscordBotToken   string
+	DiscordAPIBaseURL string
+	SharedToken       string
+	Channels          map[string]string
+	FlushInterval     time.Duration
+	MaxLogChunkBytes  int
+	QueueSize         int
+	MaxConcurrentRuns int
+	MaxStreamBytes    int64
+	StripANSI         bool
+}
+
+func LoadConfigFromEnv() (Config, error) {
+	cfg := Config{
+		ListenAddr:        envOr("WRAPPING_BOT_LISTEN_ADDR", ":8080"),
+		DiscordBotToken:   strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
+		DiscordAPIBaseURL: envOr("DISCORD_API_BASE_URL", "https://discord.com/api/v10"),
+		SharedToken:       strings.TrimSpace(os.Getenv("WRAPPING_BOT_SHARED_TOKEN")),
+		FlushInterval:     1500 * time.Millisecond,
+		MaxLogChunkBytes:  1600,
+		QueueSize:         1024,
+		MaxConcurrentRuns: 32,
+		MaxStreamBytes:    1 << 30,
+		StripANSI:         true,
+	}
+
+	if cfg.DiscordBotToken == "" {
+		return Config{}, errors.New("DISCORD_BOT_TOKEN is required")
+	}
+	if cfg.SharedToken == "" {
+		return Config{}, errors.New("WRAPPING_BOT_SHARED_TOKEN is required")
+	}
+
+	channelsRaw := strings.TrimSpace(os.Getenv("WRAPPING_BOT_CHANNELS"))
+	if channelsRaw != "" {
+		if err := json.Unmarshal([]byte(channelsRaw), &cfg.Channels); err != nil {
+			return Config{}, fmt.Errorf("parse WRAPPING_BOT_CHANNELS: %w", err)
+		}
+	} else if channelID := strings.TrimSpace(os.Getenv("DISCORD_CHANNEL_ID")); channelID != "" {
+		cfg.Channels = map[string]string{"default": channelID}
+	}
+	if len(cfg.Channels) == 0 {
+		return Config{}, errors.New("WRAPPING_BOT_CHANNELS or DISCORD_CHANNEL_ID is required")
+	}
+	for target, channelID := range cfg.Channels {
+		if strings.TrimSpace(target) == "" || strings.TrimSpace(channelID) == "" {
+			return Config{}, errors.New("channel target names and IDs must not be empty")
+		}
+	}
+
+	var err error
+	if raw := strings.TrimSpace(os.Getenv("WRAPPING_BOT_FLUSH_INTERVAL")); raw != "" {
+		cfg.FlushInterval, err = time.ParseDuration(raw)
+		if err != nil || cfg.FlushInterval <= 0 {
+			return Config{}, fmt.Errorf("invalid WRAPPING_BOT_FLUSH_INTERVAL: %q", raw)
+		}
+	}
+	if cfg.MaxLogChunkBytes, err = envInt("WRAPPING_BOT_MAX_LOG_CHUNK_BYTES", cfg.MaxLogChunkBytes); err != nil {
+		return Config{}, err
+	}
+	if cfg.QueueSize, err = envInt("WRAPPING_BOT_QUEUE_SIZE", cfg.QueueSize); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxConcurrentRuns, err = envInt("WRAPPING_BOT_MAX_CONCURRENT_RUNS", cfg.MaxConcurrentRuns); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxStreamBytes, err = envInt64("WRAPPING_BOT_MAX_STREAM_BYTES", cfg.MaxStreamBytes); err != nil {
+		return Config{}, err
+	}
+	if raw := strings.TrimSpace(os.Getenv("WRAPPING_BOT_STRIP_ANSI")); raw != "" {
+		cfg.StripANSI, err = strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid WRAPPING_BOT_STRIP_ANSI: %q", raw)
+		}
+	}
+
+	if cfg.MaxLogChunkBytes < 256 || cfg.MaxLogChunkBytes > 1800 {
+		return Config{}, errors.New("WRAPPING_BOT_MAX_LOG_CHUNK_BYTES must be between 256 and 1800")
+	}
+	if cfg.QueueSize < 1 || cfg.MaxConcurrentRuns < 1 || cfg.MaxStreamBytes < 1 {
+		return Config{}, errors.New("queue size, concurrency, and stream byte limits must be positive")
+	}
+	return cfg, nil
+}
+
+func envOr(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q", key, raw)
+	}
+	return value, nil
+}
+
+func envInt64(key string, fallback int64) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %q", key, raw)
+	}
+	return value, nil
+}

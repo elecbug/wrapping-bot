@@ -1,0 +1,26 @@
+services:
+  wrapping-botd:
+    build:
+      context: .
+      args:
+        GO_VERSION: ${GO_VERSION:-1.26.5}
+    image: wrapping-botd:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${WRAPPING_BOT_HOST_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/wrapping-botd", "healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    stop_grace_period: 15s

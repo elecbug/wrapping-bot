@@ -1,0 +1,7 @@
+.git
+.gitignore
+bin
+*.log
+.env
+client.env
+wrapping-bot.zip
