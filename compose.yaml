@@ -5,6 +5,7 @@ services:
       args:
         GO_VERSION: ${GO_VERSION:-1.26.5}
     image: wrapping-botd:local
+    container_name: wrapping-botd
     restart: unless-stopped
     env_file:
       - .env

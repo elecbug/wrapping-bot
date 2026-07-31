@@ -10,32 +10,40 @@ import (
 )
 
 type Config struct {
-	ListenAddr        string
-	DiscordBotToken   string
-	DiscordAPIBaseURL string
-	SharedToken       string
-	AllowedChannelIDs map[string]struct{}
-	FlushInterval     time.Duration
-	MaxLogChunkBytes  int
-	QueueSize         int
-	MaxConcurrentRuns int
-	MaxStreamBytes    int64
-	StripANSI         bool
+	ListenAddr            string
+	DiscordBotToken       string
+	DiscordAPIBaseURL     string
+	DiscordGatewayEnabled bool
+	DiscordGatewayURL     string
+	DiscordPresenceStatus string
+	DiscordActivity       string
+	SharedToken           string
+	AllowedChannelIDs     map[string]struct{}
+	FlushInterval         time.Duration
+	MaxLogChunkBytes      int
+	QueueSize             int
+	MaxConcurrentRuns     int
+	MaxStreamBytes        int64
+	StripANSI             bool
 }
 
 func LoadConfigFromEnv() (Config, error) {
 	cfg := Config{
-		ListenAddr:        envOr("WRAPPING_BOT_LISTEN_ADDR", ":8080"),
-		DiscordBotToken:   strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
-		DiscordAPIBaseURL: envOr("DISCORD_API_BASE_URL", "https://discord.com/api/v10"),
-		SharedToken:       strings.TrimSpace(os.Getenv("WRAPPING_BOT_SHARED_TOKEN")),
-		AllowedChannelIDs: make(map[string]struct{}),
-		FlushInterval:     1500 * time.Millisecond,
-		MaxLogChunkBytes:  1600,
-		QueueSize:         1024,
-		MaxConcurrentRuns: 32,
-		MaxStreamBytes:    1 << 30,
-		StripANSI:         true,
+		ListenAddr:            envOr("WRAPPING_BOT_LISTEN_ADDR", ":8080"),
+		DiscordBotToken:       strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")),
+		DiscordAPIBaseURL:     envOr("DISCORD_API_BASE_URL", "https://discord.com/api/v10"),
+		DiscordGatewayEnabled: true,
+		DiscordGatewayURL:     strings.TrimSpace(os.Getenv("DISCORD_GATEWAY_URL")),
+		DiscordPresenceStatus: envOr("WRAPPING_BOT_DISCORD_STATUS", "online"),
+		DiscordActivity:       envOr("WRAPPING_BOT_DISCORD_ACTIVITY", "process logs"),
+		SharedToken:           strings.TrimSpace(os.Getenv("WRAPPING_BOT_SHARED_TOKEN")),
+		AllowedChannelIDs:     make(map[string]struct{}),
+		FlushInterval:         1500 * time.Millisecond,
+		MaxLogChunkBytes:      1600,
+		QueueSize:             1024,
+		MaxConcurrentRuns:     32,
+		MaxStreamBytes:        1 << 30,
+		StripANSI:             true,
 	}
 
 	if cfg.DiscordBotToken == "" {
@@ -43,6 +51,19 @@ func LoadConfigFromEnv() (Config, error) {
 	}
 	if cfg.SharedToken == "" {
 		return Config{}, errors.New("WRAPPING_BOT_SHARED_TOKEN is required")
+	}
+	if raw := strings.TrimSpace(os.Getenv("WRAPPING_BOT_GATEWAY_ENABLED")); raw != "" {
+		enabled, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("invalid WRAPPING_BOT_GATEWAY_ENABLED: %q", raw)
+		}
+		cfg.DiscordGatewayEnabled = enabled
+	}
+	cfg.DiscordPresenceStatus = strings.ToLower(strings.TrimSpace(cfg.DiscordPresenceStatus))
+	switch cfg.DiscordPresenceStatus {
+	case "online", "idle", "dnd", "invisible":
+	default:
+		return Config{}, fmt.Errorf("invalid WRAPPING_BOT_DISCORD_STATUS: %q", cfg.DiscordPresenceStatus)
 	}
 
 	for _, channelID := range strings.Split(os.Getenv("WRAPPING_BOT_ALLOWED_CHANNEL_IDS"), ",") {

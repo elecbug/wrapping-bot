@@ -19,6 +19,7 @@ Experiment host                                  Relay host / Docker
                                                     ├─ optional allowlist check
                                                     ├─ batching / ANSI removal
                                                     ├─ Discord rate-limit handling
+                                                    ├─ Discord Gateway presence
                                                     └─ Discord channel messages
 ```
 
@@ -38,12 +39,14 @@ Two binaries are included:
 - Uses bounded asynchronous queues so Discord latency does not block the experiment process.
 - Removes ANSI terminal escape sequences by default.
 - Disables Discord mention parsing and suppresses notifications for log messages.
+- Maintains a Discord Gateway session so the bot appears online while the daemon is running.
+- Publishes a configurable presence activity, `Watching process logs` by default.
 
 ## 1. Create and invite the Discord bot
 
 Create a Discord application and bot, then invite it to the target server. The bot needs access to every selected text channel and permission to send messages there.
 
-This service only sends messages through Discord's HTTP API. It does not read server messages and does not require a Gateway connection.
+The daemon uses Discord's HTTP API for log messages and a persistent Gateway WebSocket connection for bot presence. It identifies with zero event intents, so it does not read server messages and does not require privileged Gateway intents.
 
 Copy each target channel ID from Discord developer mode.
 
@@ -58,6 +61,11 @@ Edit `.env`:
 ```dotenv
 DISCORD_BOT_TOKEN=your-discord-bot-token
 WRAPPING_BOT_SHARED_TOKEN=a-long-random-token
+
+# The Gateway connection makes the bot appear online.
+WRAPPING_BOT_GATEWAY_ENABLED=true
+WRAPPING_BOT_DISCORD_STATUS=online
+WRAPPING_BOT_DISCORD_ACTIVITY=process logs
 
 # Optional. Omit or leave empty to accept any client-selected channel
 # that the Discord bot itself can access.
@@ -84,6 +92,8 @@ docker compose ps
 docker compose logs -f wrapping-botd
 ```
 
+After a successful connection, the daemon logs `Discord Gateway ready`, and Discord shows the bot as online. Message relaying remains available through the HTTP API even while the Gateway is temporarily reconnecting.
+
 The daemon no longer requires a channel alias map. The client sends the destination channel ID in the protocol v2 start event.
 
 ## 3. Build and install the client
@@ -97,12 +107,33 @@ Configure the experiment host:
 
 ```sh
 cp client.env.example client.env
-set -a
-. ./client.env
-set +a
+chmod 600 client.env
 ```
 
+`wrapping-bot` automatically loads `./client.env` from the current working directory. No `source`, `set -a`, or shell profile modification is required.
+
 The daemon's `WRAPPING_BOT_SHARED_TOKEN` and the client's `WRAPPING_BOT_TOKEN` must match.
+
+Use another client environment file when needed:
+
+```sh
+wrapping-bot --client-env /etc/wrapping-bot/client.env -- ./exp run
+```
+
+or set its path before invocation:
+
+```sh
+export WRAPPING_BOT_CLIENT_ENV_FILE=/etc/wrapping-bot/client.env
+wrapping-bot -- ./exp run
+```
+
+Configuration precedence is:
+
+```text
+command-line option > existing process environment > client.env > built-in default
+```
+
+An absent default `./client.env` is ignored. An explicitly selected file that cannot be opened or parsed is treated as a configuration error.
 
 Set the default destination on the client:
 
@@ -196,6 +227,9 @@ When this variable is empty or absent, any holder of the shared relay token can 
 | `DISCORD_BOT_TOKEN` | required | Discord bot credential |
 | `WRAPPING_BOT_SHARED_TOKEN` | required | Client-to-daemon bearer token |
 | `WRAPPING_BOT_ALLOWED_CHANNEL_IDS` | empty | Optional comma-separated channel allowlist |
+| `WRAPPING_BOT_GATEWAY_ENABLED` | `true` | Maintain Gateway connection and online presence |
+| `WRAPPING_BOT_DISCORD_STATUS` | `online` | Presence status: `online`, `idle`, `dnd`, or `invisible` |
+| `WRAPPING_BOT_DISCORD_ACTIVITY` | `process logs` | Text shown as the bot's Watching activity; empty disables activity text |
 | `WRAPPING_BOT_LISTEN_ADDR` | `:8080` | HTTP listen address |
 | `WRAPPING_BOT_FLUSH_INTERVAL` | `1500ms` | Maximum batching delay |
 | `WRAPPING_BOT_MAX_LOG_CHUNK_BYTES` | `1600` | Log bytes placed in one Discord message body |
@@ -208,6 +242,7 @@ When this variable is empty or absent, any holder of the shared relay token can 
 
 | Variable | Default | Purpose |
 |---|---:|---|
+| `WRAPPING_BOT_CLIENT_ENV_FILE` | unset | Overrides the automatically loaded `./client.env` path |
 | `WRAPPING_BOT_ENDPOINT` | `http://127.0.0.1:8080` | Relay base URL |
 | `WRAPPING_BOT_TOKEN` | required | Shared relay credential |
 | `WRAPPING_BOT_CHANNEL_ID` | required | Destination Discord channel ID |

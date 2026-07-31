@@ -42,10 +42,28 @@ func serve() error {
 		return fmt.Errorf("initialize Discord client: %w", err)
 	}
 
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	if cfg.DiscordGatewayEnabled {
+		gateway, err := discordclient.NewGateway(discordclient.GatewayConfig{
+			BotToken:   cfg.DiscordBotToken,
+			APIBaseURL: cfg.DiscordAPIBaseURL,
+			GatewayURL: cfg.DiscordGatewayURL,
+			Status:     cfg.DiscordPresenceStatus,
+			Activity:   cfg.DiscordActivity,
+		}, logger)
+		if err != nil {
+			return fmt.Errorf("initialize Discord Gateway: %w", err)
+		}
+		go gateway.Run(runCtx)
+	} else {
+		logger.Info("Discord Gateway presence disabled")
+	}
+
 	server := daemon.NewServer(cfg, sender, logger).HTTPServer()
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("wrapping-bot daemon listening", "address", cfg.ListenAddr, "channel_selection", "client", "allowed_channel_count", len(cfg.AllowedChannelIDs))
+		logger.Info("wrapping-bot daemon listening", "address", cfg.ListenAddr, "channel_selection", "client", "allowed_channel_count", len(cfg.AllowedChannelIDs), "gateway_enabled", cfg.DiscordGatewayEnabled)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
@@ -58,10 +76,12 @@ func serve() error {
 	select {
 	case sig := <-signalCh:
 		logger.Info("shutdown signal received", "signal", sig.String())
+		cancelRun()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
 	case err := <-errCh:
+		cancelRun()
 		return err
 	}
 }
