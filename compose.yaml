@@ -24,3 +24,12 @@ services:
       retries: 3
       start_period: 5s
     stop_grace_period: 15s
+    networks:
+      - wrapping-bot-net
+
+networks:
+  wrapping-bot-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.230.1.0/24
